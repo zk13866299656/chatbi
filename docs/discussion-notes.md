@@ -48,10 +48,12 @@
 ## 二、待拍板事项(按建议优先级)
 
 1. ~~**会话管理**~~ ✅ 已完成(2026-09-01):`conversations`/`chat_messages` 两表(UUID 主键规避 SQLite/MySQL 自增方言差异)、懒创建会话、提问先落库(中断不丢)、最终结果含图表 payload 整体落库、前端侧栏新建/切换/删除、刷新后从后端重拉完整还原。踩坑记录:同秒内多条消息按秒级时间戳排序不稳定(UUID 主键顺序随机),时间戳改微秒精度修复。多轮追问:历史由前端带最近 4 轮给 supervisor 改写
-2. **EmbeddingRetriever 真实现**(可选,高加分):接 OpenAI 兼容 embeddings 或本地 bge-small + FAISS;评测集扩到 50 条,跑 TF-IDF vs Embedding 准确率对比——产出一份有数据的检索选型结论
+2. ~~**EmbeddingRetriever 真实现**~~ ✅ 已完成(2026-09-01):fastembed 本地 ONNX(bge-small-zh-v1.5)+ OpenAI 兼容 API 双后端,与 TF-IDF 同接口可切换(EMBEDDING_BACKEND=auto/tfidf/embedding);评测集扩到 50 条(含 4 条口语化改写);`evals/retriever_benchmark.py` 双后端对比。
+   - 结果:TF-IDF 30% vs Embedding 36%;可覆盖题 15/18 vs **18/18**;3 条口语题仅 Embedding 通过,零反向
+   - 关键教训:①示例匹配的时间归一化对 embedding 同样必需(时间前缀语义相似同样导致错配);②示例库扩容暴露 TF-IDF 的"品类/品牌"一字之差混淆;③弃权 vs 答错的权衡(embedding 余弦普遍偏高,覆盖广但错配时给出自信错答案,生产需配拒答阈值)
 3. **自建 MCP Server**(Roadmap 下一站):封装数据查询/口径能力供外部 Agent 复用,与旅行项目(只消费官方 MCP)形成差异化亮点
 4. MySQL 切换(简历定稿时):建库 → 换 DB_URL → `pip install pymysql` → 重跑两个数据脚本,业务代码零改动
-5. 评测集扩充 + GitHub Actions 评测门禁(CI)
+5. GitHub Actions 评测门禁(CI)
 
 ## 三、已完成里程碑
 

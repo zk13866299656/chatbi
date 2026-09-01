@@ -254,7 +254,8 @@ async def generate_sql_node(state: dict) -> dict:
             events.append(_emit("generate_sql", "LLM 生成失败,启用示例匹配兜底"))
 
     examples = sorted(state.get("example_sqls", []), key=lambda item: item["score"], reverse=True)
-    if examples and examples[0]["score"] >= 0.35:
+    threshold = getattr(get_retriever(), "example_threshold", 0.35)
+    if examples and examples[0]["score"] >= threshold:
         sql = _finalize_sql(examples[0]["sql"], state)
         events.append(_emit(
             "generate_sql",

@@ -233,6 +233,61 @@ FEW_SHOT_EXAMPLES: list[dict] = [
             "FROM fact_reviews WHERE created_at >= '__PSTART__' AND created_at < '__PEND__'"
         ),
     },
+    {
+        "question": "最近30天各城市的销售额TOP10",
+        "sql": (
+            "SELECT s.city AS city, SUM(o.pay_amount) AS gmv "
+            "FROM fact_orders o JOIN dim_shop s ON o.shop_id = s.shop_id "
+            "WHERE o.order_status IN ('已完成','已支付','已退款') "
+            "AND o.order_date >= '__PSTART__' AND o.order_date < '__PEND__' "
+            "GROUP BY s.city ORDER BY gmv DESC LIMIT 10"
+        ),
+    },
+    {
+        "question": "上个月各品牌的销售额排名",
+        "sql": (
+            "SELECT s.brand AS brand, SUM(o.pay_amount) AS gmv "
+            "FROM fact_orders o JOIN dim_shop s ON o.shop_id = s.shop_id "
+            "WHERE o.order_status IN ('已完成','已支付','已退款') "
+            "AND o.order_date >= '__PSTART__' AND o.order_date < '__PEND__' "
+            "GROUP BY s.brand ORDER BY gmv DESC"
+        ),
+    },
+    {
+        "question": "上个月各支付方式的GMV",
+        "sql": (
+            "SELECT pay_method, SUM(pay_amount) AS gmv "
+            "FROM fact_orders "
+            "WHERE order_status IN ('已完成','已支付','已退款') "
+            "AND pay_method <> '' "
+            "AND order_date >= '__PSTART__' AND order_date < '__PEND__' "
+            "GROUP BY pay_method ORDER BY gmv DESC"
+        ),
+    },
+    {
+        "question": "评分最低的3个店铺",
+        "sql": (
+            "SELECT s.shop_name AS shop_name, AVG(rv.star) AS avg_star "
+            "FROM fact_reviews rv "
+            "JOIN fact_orders o ON rv.order_id = o.order_id "
+            "JOIN dim_shop s ON o.shop_id = s.shop_id "
+            "GROUP BY s.shop_name ORDER BY avg_star ASC LIMIT 3"
+        ),
+    },
+    {
+        "question": "各订单状态的分布",
+        "sql": (
+            "SELECT order_status, COUNT(*) AS order_count "
+            "FROM fact_orders GROUP BY order_status ORDER BY order_count DESC"
+        ),
+    },
+    {
+        "question": "各区域有多少客户",
+        "sql": (
+            "SELECT region, COUNT(*) AS customer_count "
+            "FROM dim_customer GROUP BY region ORDER BY customer_count DESC"
+        ),
+    },
 ]
 
 

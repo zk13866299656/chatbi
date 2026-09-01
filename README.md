@@ -75,13 +75,15 @@ npm run dev                        # http://localhost:5173
 
 ```bash
 cd backend
-python evals/eval_runner.py --no-gate          # 输出执行准确率与耗时报告
+python evals/eval_runner.py --no-gate          # 执行准确率回归(50 条用例)
 python evals/eval_runner.py --gate-threshold 0.6   # CI 门禁模式
+python evals/retriever_benchmark.py            # TF-IDF vs Embedding 检索对比
 ```
 
-- 降级模式基线: **80%**(8/10,无 LLM,纯检索匹配)
-- LLM 模式: 配置 API Key 后运行,生成 SQL 与标注 SQL 对比结果集
-- 报告输出至 `evals/report_*.md`
+- 评测集 50 条:多表 JOIN / 聚合 / 时间窗 / 口径计算 / 口语化改写(4 条)
+- 降级模式(LLM 关闭,检索直接决定 SQL):TF-IDF 30% vs Embedding 36%,
+  示例库可覆盖题上 15/18 vs 18/18,差异与结论见 `evals/comparison_report.md`
+- 报告输出至 `evals/report_*.md` / `evals/comparison_report.md`
 
 ## 六、工程亮点
 
@@ -92,6 +94,7 @@ python evals/eval_runner.py --gate-threshold 0.6   # CI 门禁模式
 5. **SSE 过程透出**: 前端实时渲染每个 Agent 节点的进度时间线,长查询不再黑盒等待
 6. **归因模板化**: "为什么涨/跌"走模板 SQL + 贡献度计算,数字全部来自真实查询,不让 LLM 编造
 7. **会话持久化**: 对话与最终结果(图表/SQL/数据)落库,UUID 主键规避自增方言差异,刷新/重开不丢,支撑多轮追问
+8. **检索双后端 + 对比评测**: TF-IDF 与 Embedding(bge-small-zh, fastembed ONNX 本地推理)同接口可切换;50 条评测集实测:Embedding 在口语化问法上全面胜出(36% vs 30%,可覆盖题 18/18 vs 15/18),详见 `evals/comparison_report.md`
 
 ## 七、Roadmap
 

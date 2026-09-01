@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     sql_max_rows: int = 200
     sql_timeout_seconds: float = 10.0
 
+    # 语义检索后端: auto(优先 embedding,不可用回退 tfidf) | tfidf | embedding
+    embedding_backend: str = "auto"
+    # embedding 提供方: local(fastembed 本地 ONNX, 默认) | api(OpenAI 兼容 /embeddings)
+    embedding_provider: str = "local"
+    embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    embedding_api_key: str = ""
+    embedding_base_url: str = ""
+
     log_level: str = "INFO"
 
     @property
