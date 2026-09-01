@@ -42,6 +42,7 @@ const INTENT_LABELS: Record<string, string> = {
 }
 
 const messages = reactive<ChatMessage[]>([])
+const expandedDetails = reactive<Record<number, string[]>>({})
 const conversations = ref<ConversationInfo[]>([])
 const currentConvId = ref<string | null>(null)
 const input = ref('')
@@ -88,12 +89,23 @@ function fmtTime(iso: string): string {
 function mapStored(stored: StoredMessage[]): ChatMessage[] {
   return stored.map((m) => {
     if (m.role === 'user') return { role: 'user', text: m.content }
-    const payload = m.payload as (ChatFinal & { events?: ChatEvent[] }) | null
-    return {
-      role: 'assistant',
-      final: payload ?? undefined,
-      events: payload?.events ?? [],
+    const p = (m.payload ?? {}) as Partial<ChatFinal> & { events?: ChatEvent[] }
+    // 历史消息可能缺字段(早期版本闲聊/兜底消息没有 rows), 统一补默认值,
+    // 否则模板里 rows.slice 会抛异常, 打断 Vue 渲染导致整个应用假死
+    const final: ChatFinal = {
+      question: p.question ?? '',
+      intent: p.intent ?? 'query',
+      answer_md: p.answer_md ?? '',
+      sql: p.sql ?? '',
+      columns: p.columns ?? [],
+      rows: p.rows ?? [],
+      row_count: p.row_count ?? (p.rows?.length ?? 0),
+      chart_type: p.chart_type ?? 'table',
+      chart_spec: p.chart_spec ?? {},
+      mode: p.mode ?? 'fallback',
+      period: p.period ?? [],
     }
+    return { role: 'assistant', final, events: p.events ?? [] }
   })
 }
 
@@ -321,14 +333,19 @@ watch(
                     class="final-chart"
                   />
 
-                  <el-collapse class="detail">
+                  <el-collapse class="detail" :model-value="expandedDetails[idx] || []" @change="(v: any) => (expandedDetails[idx] = v)">
                     <el-collapse-item title="查看生成的 SQL" name="sql">
                       <pre class="sql-code">{{ msg.final.sql || '(降级/归因模式:使用内置模板查询)' }}</pre>
                     </el-collapse-item>
-                    <el-collapse-item :title="`原始数据(${msg.final.row_count} 行)`" name="rows">
-                      <el-table :data="msg.final.rows.slice(0, 50)" size="small" max-height="320">
+                    <el-collapse-item :title="`原始数据(${msg.final.row_count || 0} 行)`" name="rows">
+                      <el-table
+                        v-if="(expandedDetails[idx] || []).includes('rows')"
+                        :data="(msg.final.rows || []).slice(0, 50)"
+                        size="small"
+                        max-height="320"
+                      >
                         <el-table-column
-                          v-for="(col, cIdx) in msg.final.columns"
+                          v-for="(col, cIdx) in msg.final.columns || []"
                           :key="col"
                           :prop="String(cIdx)"
                           :label="col"

@@ -52,11 +52,27 @@ def _ensure_conversation(req: ChatRequest) -> str:
 
 
 def _persist_final(conversation_id: str, question: str, final: dict) -> None:
-    """工作流结束后,把 assistant 最终结果(含图表/SQL/节点事件)落库。"""
-    payload = {k: v for k, v in final.items() if k not in ("type",)}
-    payload["events"] = final.get("events", [])
+    """工作流结束后,把 assistant 最终结果(含图表/SQL/节点事件)落库。
+
+    字段统一补默认值:历史上曾因闲聊/兜底消息缺 rows 等字段,
+    前端渲染历史时抛异常导致整个应用假死。
+    """
+    payload = {
+        "question": question,
+        "intent": final.get("intent") or "query",
+        "answer_md": final.get("answer_md") or "",
+        "sql": final.get("sql") or "",
+        "columns": final.get("columns") or [],
+        "rows": final.get("rows") or [],
+        "row_count": final.get("row_count") or 0,
+        "chart_type": final.get("chart_type") or "table",
+        "chart_spec": final.get("chart_spec") or {},
+        "mode": final.get("mode") or "fallback",
+        "period": [final.get("period_start") or None, final.get("period_end") or None],
+        "events": final.get("events") or [],
+    }
     store.append_messages(conversation_id, [
-        ("assistant", payload.get("answer_md", ""), payload),
+        ("assistant", payload["answer_md"], payload),
     ])
 
 
