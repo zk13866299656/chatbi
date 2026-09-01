@@ -8,8 +8,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.routes import chat, dashboard, meta
+from .api.routes import chat, conversations, dashboard, meta
 from .config import get_settings
+from .db import store
 from .rag.retriever import get_retriever
 
 logging.basicConfig(
@@ -29,6 +30,7 @@ async def lifespan(_: FastAPI):
     retriever = get_retriever()
     logger.info("语义层索引预热完成: %d 份语料", len(retriever._docs))
     await data_end_probe()
+    await asyncio.to_thread(store.ensure_tables)
     yield
 
 
@@ -43,5 +45,6 @@ app.add_middleware(
 )
 
 app.include_router(meta.router, prefix="/api")
+app.include_router(conversations.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")

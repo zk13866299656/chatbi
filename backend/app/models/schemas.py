@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=500, description="用户问题")
     history: List[Dict[str, str]] = Field(default_factory=list, description="最近对话历史")
+    conversation_id: Optional[str] = Field(default=None, description="会话ID;为空则自动创建新会话")
 
 
 class ChatFinalData(BaseModel):

@@ -14,6 +14,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from ...models.schemas import ApiResponse, ChatRequest
+from ...db import store
 from ...workflows.graph import get_workflow
 from ...workflows.state import create_initial_state
 
@@ -42,31 +43,66 @@ def _final_payload(state: dict) -> dict:
     }
 
 
+def _ensure_conversation(req: ChatRequest) -> str:
+    """取现有会话 ID 或懒创建新会话(标题取首问截断)。"""
+    if req.conversation_id:
+        return req.conversation_id
+    return store.create_conversation(title=req.question)["id"]
+
+
+def _persist_final(conversation_id: str, question: str, final: dict) -> None:
+    """工作流结束后,把 assistant 最终结果(含图表/SQL/节点事件)落库。"""
+    payload = {k: v for k, v in final.items() if k not in ("type",)}
+    payload["events"] = final.get("events", [])
+    store.append_messages(conversation_id, [
+        ("assistant", payload.get("answer_md", ""), payload),
+    ])
+
+
 async def _run_workflow(question: str, history: list[dict]) -> dict:
     final: dict = {}
+    all_events: list = []
     async for chunk in get_workflow().graph.astream(
         create_initial_state(question, history), stream_mode="updates"
     ):
         for update in chunk.values():
+            if not update:
+                continue
+            all_events.extend(update.get("events", []))
             final.update(update)
+    final["events"] = all_events
     return final
 
 
 @router.post("/chat", response_model=ApiResponse)
 async def chat(req: ChatRequest):
     """非流式接口(评测脚本与联调用)。"""
+    conversation_id = _ensure_conversation(req)
+    store.append_messages(conversation_id, [("user", req.question, None)])
     final = await _run_workflow(req.question, req.history)
-    return ApiResponse(data=_final_payload(final))
+    _persist_final(conversation_id, req.question, final)
+    data = _final_payload(final)
+    data["conversation_id"] = conversation_id
+    return ApiResponse(data=data)
 
 
 @router.post("/chat/stream")
 async def chat_stream(req: ChatRequest):
-    """SSE 流式接口:逐节点推送进度,结束时推送完整结果。"""
+    """SSE 流式接口:逐节点推送进度,结束时推送完整结果。
+
+    会话在首条消息时懒创建;用户消息在工作流启动前先落库,
+    即使请求中断,提问记录也不丢失。
+    """
+    import asyncio
+
+    conversation_id = _ensure_conversation(req)
+    await asyncio.to_thread(store.append_messages, conversation_id, [("user", req.question, None)])
 
     async def event_generator():
-        yield _sse({"type": "start", "question": req.question})
+        yield _sse({"type": "start", "question": req.question, "conversation_id": conversation_id})
         try:
             final: dict = {}
+            all_events: list = []
             async for chunk in get_workflow().graph.astream(
                 create_initial_state(req.question, req.history), stream_mode="updates"
             ):
@@ -74,9 +110,14 @@ async def chat_stream(req: ChatRequest):
                     if not update:
                         continue
                     for event in update.get("events", []):
+                        all_events.append(event)
                         yield _sse({"type": "node", **event})
                     final.update(update)
-            yield _sse(_final_payload(final))
+            final["events"] = all_events
+            await asyncio.to_thread(_persist_final, conversation_id, req.question, final)
+            data = _final_payload(final)
+            data["conversation_id"] = conversation_id
+            yield _sse(data)
         except Exception as exc:  # noqa: BLE001
             logger.exception("对话工作流异常")
             yield _sse({"type": "error", "message": f"服务内部错误: {exc}"})

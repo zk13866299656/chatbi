@@ -7,6 +7,21 @@ export interface ChatEvent {
   [key: string]: unknown
 }
 
+export interface ConversationInfo {
+  id: string
+  title: string
+  created_at: string
+  message_count: number
+}
+
+export interface StoredMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  payload: ChatFinal | null
+  created_at: string
+}
+
 export interface ChatFinal {
   question: string
   intent: string

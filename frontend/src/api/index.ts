@@ -1,11 +1,25 @@
 import axios from 'axios'
-import type { CategoryData, ChatEvent, ChatFinal, OverviewData, SemanticLayer, TrendData } from '../types'
+import type { CategoryData, ChatEvent, ChatFinal, ConversationInfo, OverviewData, SemanticLayer, StoredMessage, TrendData } from '../types'
 
 const http = axios.create({ baseURL: '/api', timeout: 120000 })
 
 export async function fetchHealth(): Promise<{ llm_enabled: boolean; mode: string }> {
   const { data } = await http.get('/health')
   return data.data
+}
+
+export async function listConversations(): Promise<ConversationInfo[]> {
+  const { data } = await http.get('/conversations')
+  return data.data
+}
+
+export async function fetchMessages(conversationId: string): Promise<StoredMessage[]> {
+  const { data } = await http.get(`/conversations/${conversationId}/messages`)
+  return data.data
+}
+
+export async function removeConversation(conversationId: string): Promise<void> {
+  await http.delete(`/conversations/${conversationId}`)
 }
 
 export async function fetchOverview(days = 30): Promise<OverviewData> {
@@ -35,7 +49,9 @@ export async function fetchSemanticLayer(): Promise<SemanticLayer> {
 export function streamChat(
   question: string,
   history: { role: string; content: string }[],
+  conversationId: string | null,
   handlers: {
+    onStart?: (data: { conversation_id?: string }) => void
     onEvent: (event: ChatEvent) => void
     onFinal: (final: ChatFinal) => void
     onError: (message: string) => void
@@ -48,7 +64,7 @@ export function streamChat(
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, history }),
+        body: JSON.stringify({ question, history, conversation_id: conversationId }),
         signal: controller.signal,
       })
       if (!response.ok || !response.body) {
@@ -72,7 +88,8 @@ export function streamChat(
             return
           }
           const event = JSON.parse(payload)
-          if (event.type === 'node') handlers.onEvent(event)
+          if (event.type === 'start') handlers.onStart?.(event)
+          else if (event.type === 'node') handlers.onEvent(event)
           else if (event.type === 'final') handlers.onFinal(event)
           else if (event.type === 'error') handlers.onError(event.message)
         }
