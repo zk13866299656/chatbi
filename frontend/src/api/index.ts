@@ -37,6 +37,18 @@ export async function fetchCategory(days = 30): Promise<CategoryData> {
   return data.data
 }
 
+export interface CategoryHealthItem {
+  category: string
+  gmv: number
+  refund_rate: number
+  avg_star: number
+}
+
+export async function fetchCategoryHealth(days = 30): Promise<CategoryHealthItem[]> {
+  const { data } = await http.get('/dashboard/category-health', { params: { days } })
+  return data.data
+}
+
 export async function fetchSemanticLayer(): Promise<SemanticLayer> {
   const { data } = await http.get('/meta/semantic-layer')
   return data.data

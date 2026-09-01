@@ -7,7 +7,14 @@ import DashboardView from './views/DashboardView.vue'
 import SchemaView from './views/SchemaView.vue'
 
 const activeView = ref('chat')
+const pendingQuestion = ref('')
 const llmMode = ref<'llm' | 'fallback' | 'loading'>('loading')
+
+/** 看板 → 对话联动:切换到对话页并自动带出问题 */
+function onAsk(question: string) {
+  pendingQuestion.value = question
+  activeView.value = 'chat'
+}
 
 const NAV = [
   { key: 'chat', label: '对话问数', icon: ChatDotRound },
@@ -67,8 +74,12 @@ onMounted(async () => {
 
     <main class="main">
       <div :key="activeView" class="view-anim" style="height: 100%">
-        <ChatView v-if="activeView === 'chat'" />
-        <DashboardView v-else-if="activeView === 'dashboard'" />
+        <ChatView
+          v-if="activeView === 'chat'"
+          :initial-question="pendingQuestion"
+          @consumed="pendingQuestion = ''"
+        />
+        <DashboardView v-else-if="activeView === 'dashboard'" @ask="onAsk" />
         <SchemaView v-else />
       </div>
     </main>

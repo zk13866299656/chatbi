@@ -102,3 +102,40 @@ async def category(days: int = Query(30, ge=7, le=90)):
         "categories": [row[0] for row in rows],
         "gmv": [float(row[1] or 0) for row in rows],
     })
+
+
+@router.get("/dashboard/category-health", response_model=ApiResponse)
+async def category_health(days: int = Query(30, ge=7, le=90)):
+    """品类健康度:退款率 × 平均评分 × GMV,用于四象限定位问题品类。"""
+    params = _windows(days)
+    sql_main = text(f"""
+        SELECT s.category AS category, SUM(o.pay_amount) AS gmv,
+               COUNT(DISTINCT o.order_id) AS paid_orders,
+               COUNT(DISTINCT CASE WHEN o.order_status = '已退款' THEN o.order_id END) AS refund_orders
+        FROM fact_orders o JOIN dim_shop s ON o.shop_id = s.shop_id
+        WHERE o.order_status IN {PAID_STATUS} AND o.order_date >= :ps AND o.order_date < :pe
+        GROUP BY s.category
+    """)
+    sql_star = text(f"""
+        SELECT s.category AS category, AVG(rv.star) AS avg_star
+        FROM fact_reviews rv
+        JOIN fact_orders o ON rv.order_id = o.order_id
+        JOIN dim_shop s ON o.shop_id = s.shop_id
+        WHERE o.order_status IN {PAID_STATUS} AND o.order_date >= :ps AND o.order_date < :pe
+        GROUP BY s.category
+    """)
+    with engine.connect() as conn:
+        main_rows = conn.execute(sql_main, params).mappings().all()
+        star_rows = {row["category"]: float(row["avg_star"]) for row in conn.execute(sql_star, params).mappings().all()}
+
+    data = []
+    for row in main_rows:
+        paid = int(row["paid_orders"] or 0)
+        data.append({
+            "category": row["category"],
+            "gmv": round(float(row["gmv"] or 0), 2),
+            "refund_rate": round(int(row["refund_orders"] or 0) / paid * 100, 2) if paid else 0,
+            "avg_star": round(star_rows.get(row["category"], 0), 2),
+        })
+    data.sort(key=lambda item: item["gmv"], reverse=True)
+    return ApiResponse(data=data)

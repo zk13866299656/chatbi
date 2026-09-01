@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Promotion, Plus, Delete, TrendCharts, DataLine, Odometer, Aim, PieChart, Wallet } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchMessages, listConversations, removeConversation, streamChat } from '../api'
 import type { ChatEvent, ChatFinal, ChatMessage, ConversationInfo, StoredMessage } from '../types'
 import ChartBlock from '../components/ChartBlock.vue'
+
+const props = defineProps<{ initialQuestion?: string }>()
+const emit = defineEmits<{ (e: 'consumed'): void }>()
 
 const SUGGESTIONS = [
   { icon: TrendCharts, text: '2026年6月各品类的销售额排名' },
@@ -182,6 +185,18 @@ async function send(question?: string) {
 }
 
 onBeforeUnmount(() => abort?.())
+
+// 看板联动:外部带问题进来时自动发送(若正在流式请求中则先填入输入框)
+watch(
+  () => props.initialQuestion,
+  (q) => {
+    if (!q) return
+    emit('consumed')
+    if (sending.value) input.value = q
+    else send(q)
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
