@@ -58,6 +58,12 @@ def check_sql_safety(sql: str) -> tuple[str, str | None]:
     if unknown:
         return cleaned, f"引用了未注册的表: {', '.join(sorted(unknown))}"
 
+    # 占位符残留检查:LLM 偶尔会照抄 few-shot 里的占位符,
+    # 在 SQLite 中 '__PSTART__' 参与字符串比较会静默返回错误结果,必须拦截
+    for token in ("__PSTART__", "__PEND__", "{REGION}"):
+        if token in cleaned.upper():
+            return cleaned, f"SQL 中存在未替换的占位符 {token}"
+
     settings = get_settings()
     limit_match = _LIMIT_RE.search(cleaned)
     if limit_match:

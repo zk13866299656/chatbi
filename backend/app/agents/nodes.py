@@ -109,6 +109,13 @@ def _is_chitchat(question: str) -> bool:
     return normalized in GREETINGS or (len(normalized) <= 8 and "你好" in normalized)
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _valid_period(start: str, end: str) -> bool:
+    return bool(_DATE_RE.match(start or "") and _DATE_RE.match(end or ""))
+
+
 # ============ 意图解析 ============
 
 async def supervisor_node(state: dict) -> dict:
@@ -128,11 +135,16 @@ async def supervisor_node(state: dict) -> dict:
             intent = data.get("intent", "query")
             if intent not in ("query", "attribution", "chitchat"):
                 intent = "query"
+            period_start = data.get("period_start") or ""
+            period_end = data.get("period_end") or ""
+            # LLM 漏给/给错时间窗时回退规则解析,否则占位符会被替换成空串导致口径放大
+            if not _valid_period(period_start, period_end):
+                period_start, period_end = parse_period_fallback(question)
             return {
                 "intent": intent,
                 "rewritten_question": (data.get("rewritten_question") or question).strip(),
-                "period_start": data.get("period_start", ""),
-                "period_end": data.get("period_end", ""),
+                "period_start": period_start,
+                "period_end": period_end,
                 "mode": "llm",
                 "events": started_events + [_emit("supervisor", f"意图识别: {intent}")],
             }
