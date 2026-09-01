@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# 数据与产物(数据可由脚本一键重建)
+backend/data/
+backend/evals/report_*.md
+
+# 前端
+node_modules/
+frontend/dist/
+
+# 环境与 IDE
+.env
+.idea/
+.vscode/
+*.log
+.DS_Store

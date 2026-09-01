@@ -1,0 +1,105 @@
+# ChatBI · 智能经营分析问数平台
+
+> 面向"业务取数依赖数据组排期、响应以天计"的传统瓶颈,构建自然语言问数系统:
+> 业务人员用一句中文提问,系统自动完成 **意图解析 → 语义检索 → SQL 生成 → 安全校验 → 执行 → 图表推荐 → 结论/归因**,
+> 取数响应从天级压到秒级。基于 LangGraph 多 Agent 编排 + RAG 语义层 + SSE 流式交互。
+
+---
+
+## 一、解决什么问题
+
+| | 传统方式 | ChatBI |
+|---|---|---|
+| 取数流程 | 提需求 → 数据组排期 → 写 SQL → 导 Excel → 回传 | 自然语言直接问,秒级返回图表 |
+| 指标口径 | 各写各的 SQL,同名指标数字对不上 | 口径统一维护在语义层,LLM 强制遵循 |
+| 异动分析 | 事后人工拆维度找原因 | 自动对比上期、分品类/区域计算贡献度 |
+| 结果可信度 | 黑盒导出 | 生成 SQL 全程透明可核查,安全层硬校验 |
+
+## 二、架构
+
+```text
+                          ┌────────────────────────────────────────────┐
+        用户提问           │              FastAPI (SSE 流式)             │
+  ┌──────────────────┐    │  ┌──────────────────────────────────────┐  │
+  │ Vue3 + Element+  │───▶│  │        LangGraph 工作流编排           │  │
+  │ ECharts 对话/看板 │◀───│  │                                      │  │
+  └──────────────────┘    │  │ supervisor(意图解析/时间窗/改写)      │  │
+                          │  │   ├─ query ──→ [表结构检索 ∥ 口径检索] │  │
+                          │  │   │               └─→ SQL生成        │  │
+                          │  │   │                 └─→ 安全校验 ─┐   │  │
+                          │  │   │                   ↑(失败修复)│   │  │
+                          │  │   │                执行 → 图表 → 结论   │  │
+                          │  │   ├─ attribution → 归因拆解(模板SQL)  │  │
+                          │  │   └─ chitchat ──→ 闲聊应答            │  │
+                          │  └──────────────────────────────────────┘  │
+                          │   RAG: TF-IDF 语义层检索(可升级 Embedding)  │
+                          │   安全层: 白名单/黑名单/EXPLAIN/行数上限      │
+                          └───────────────┬────────────────────────────┘
+                                          │ SQLAlchemy
+                                   MySQL / SQLite(10万级订单)
+```
+
+## 三、技术栈
+
+- **Agent 编排**: LangGraph(StateGraph、条件路由、并行分支、屏障汇合、修复环)
+- **LLM**: OpenAI 兼容接口(DeepSeek / Qwen / GLM),JSON 结构化输出 + 失败重试
+- **RAG**: 语义层语料(表结构/指标口径/few-shot 示例)+ TF-IDF char n-gram 检索,预留 Embedding 升级位
+- **后端**: FastAPI + SQLAlchemy 2.0 + Pydantic v2,SSE 流式输出,asyncio 线程池执行 SQL
+- **数据**: 自建中文电商仿真数据集(10.7 万订单 / 17.9 万明细,内置 618/双11 季节性与品类差异)
+- **前端**: Vue3 + TypeScript + Element Plus + ECharts,SSE 时间线 + 图表自动渲染
+- **评测**: 10 条标注用例,执行准确率(execution accuracy)离线回归
+
+## 四、快速开始
+
+```bash
+# 1. 后端
+cd backend
+python -m venv .venv && .venv\Scripts\activate       # Windows
+pip install -r requirements.txt
+
+python scripts/generate_data.py    # 生成 10 万级中文电商数据
+python scripts/init_db.py          # 建表导入(SQLite 默认,可切 MySQL)
+
+python run.py                      # http://localhost:8000/docs
+
+# 2. 前端
+cd frontend
+npm install
+npm run dev                        # http://localhost:5173
+```
+
+**LLM 配置(可选)**: 复制 `backend/.env.example` 为 `.env`,填入 `LLM_API_KEY` 即进入 LLM 模式;
+不配置则自动进入**降级模式**(规则时间解析 + 示例 SQL 匹配兜底),全流程依然可演示。
+
+## 五、评测
+
+```bash
+cd backend
+python evals/eval_runner.py --no-gate          # 输出执行准确率与耗时报告
+python evals/eval_runner.py --gate-threshold 0.6   # CI 门禁模式
+```
+
+- 降级模式基线: **80%**(8/10,无 LLM,纯检索匹配)
+- LLM 模式: 配置 API Key 后运行,生成 SQL 与标注 SQL 对比结果集
+- 报告输出至 `evals/report_*.md`
+
+## 六、工程亮点
+
+1. **安全层是硬约束**: 只允许单条 SELECT、表名白名单、DDL/DML 黑名单、强制行数上限、执行前 EXPLAIN,LLM 生成的 SQL 不可信默认
+2. **降级全链路**: LLM 不可用时,意图规则解析 + 时间窗规则提取 + 示例 SQL 相似度匹配,系统零配置可跑通
+3. **语义层 = 口径统一**: 指标口径(GMV/退款率/客单价/复购率)文档化并强制注入 Prompt,杜绝"同名不同数"
+4. **示例检索的时间归一化**: 示例匹配在时间无关语义上进行(数字归一化),避免日期字符的高 IDF 干扰结构匹配
+5. **SSE 过程透出**: 前端实时渲染每个 Agent 节点的进度时间线,长查询不再黑盒等待
+6. **归因模板化**: "为什么涨/跌"走模板 SQL + 贡献度计算,数字全部来自真实查询,不让 LLM 编造
+
+## 七、Roadmap
+
+- [ ] 自建 MCP Server 封装数据查询能力,支持 Cursor/其他 Agent 复用
+- [ ] Embedding + rerank 升级语义检索,构建百条级评测集
+- [ ] 多轮上下文指代消解("那上个月呢")
+- [ ] MySQL 部署 + Docker Compose 一键起
+- [ ] 用户体系与数据权限(行级过滤)
+
+## License
+
+MIT
