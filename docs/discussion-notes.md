@@ -51,7 +51,7 @@
 2. ~~**EmbeddingRetriever 真实现**~~ ✅ 已完成(2026-09-01):fastembed 本地 ONNX(bge-small-zh-v1.5)+ OpenAI 兼容 API 双后端,与 TF-IDF 同接口可切换(EMBEDDING_BACKEND=auto/tfidf/embedding);评测集扩到 50 条(含 4 条口语化改写);`evals/retriever_benchmark.py` 双后端对比。
    - 结果:TF-IDF 30% vs Embedding 36%;可覆盖题 15/18 vs **18/18**;3 条口语题仅 Embedding 通过,零反向
    - 关键教训:①示例匹配的时间归一化对 embedding 同样必需(时间前缀语义相似同样导致错配);②示例库扩容暴露 TF-IDF 的"品类/品牌"一字之差混淆;③弃权 vs 答错的权衡(embedding 余弦普遍偏高,覆盖广但错配时给出自信错答案,生产需配拒答阈值)
-3. **自建 MCP Server**(Roadmap 下一站):封装数据查询/口径能力供外部 Agent 复用,与旅行项目(只消费官方 MCP)形成差异化亮点
+3. ~~**自建 MCP Server**~~ ✅ 已完成(2026-09-01):FastMCP(官方 SDK,锁定 1.x)暴露 4 个工具(ask_data 完整问数 / execute_validated_sql 安全执行 / list_semantic_layer / get_metric_definition),复用现有 LangGraph 工作流与安全层;stdio + streamable-http 双传输;MCP 客户端协议实测全通过(发现/拦截/问数)。配套**语义层配置化**(SEMANTIC_LAYER_FILE 指向 YAML)——私有化部署接入"自己的数据库"的前置能力;接入文档 docs/mcp.md
 4. MySQL 切换(简历定稿时):建库 → 换 DB_URL → `pip install pymysql` → 重跑两个数据脚本,业务代码零改动
 5. GitHub Actions 评测门禁(CI)
 

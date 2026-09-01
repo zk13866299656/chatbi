@@ -1,0 +1,54 @@
+# ============================================================
+# ChatBI 语义层配置模板(私有化部署接入"自己的数据库"时使用)
+# ============================================================
+# 使用方式:
+#   1. 复制本文件为 semantic_layer.yaml(与 backend/.env 同目录)
+#   2. 按你自己的数据库表结构填写 tables / metrics / examples
+#   3. 在 .env 中配置:
+#        DB_URL="mysql+pymysql://user:pass@127.0.0.1:3306/your_db?charset=utf8mb4"
+#        SEMANTIC_LAYER_FILE="semantic_layer.yaml"
+#   4. 重启 FastAPI 或 MCP Server,语义层即切换为你的业务数据
+#
+# 编写建议:
+#   - fields 说明写"业务含义"而不是复述字段名,这是 LLM 写对 SQL 的关键
+#   - 每个指标必须给出可执行的精确口径(涉及哪些表、什么过滤条件)
+#   - examples 覆盖最常问的 10~20 种问法,SQL 中时间段用 __PSTART__/__PEND__ 占位
+
+tables:
+  - table: your_fact_table
+    meaning: 订单事实表,一行一笔订单,销售额/订单量类指标的主表
+    fields:
+      order_id: 订单号(主键)
+      customer_id: 客户ID,关联客户维表
+      amount: 实付金额,仅支付成功的订单大于 0
+      order_date: 下单时间,格式 YYYY-MM-DD HH:MM:SS
+      status: 订单状态:已支付/已退款/已取消
+
+  - table: your_dim_product
+    meaning: 商品维表
+    fields:
+      product_id: 商品ID(主键)
+      product_name: 商品名称
+      category: 品类
+
+# 表之间的关联关系(可选,给 LLM 的 JOIN 提示)
+joins:
+  - "订单-商品: 通过订单明细表关联"
+
+# 指标口径:每个指标给出唯一、可执行的精确定义
+metrics:
+  - metric: 销售额
+    definition: "SUM(amount),统计范围 status IN ('已支付','已退款')"
+    note: 已退款订单计入销售额(钱曾收进);问"净销售额"时再剔除
+
+# few-shot 示例:检索命中的参考 SQL,也是降级模式的兜底答案
+# 时间占位符 __PSTART__/__END__(结束日开区间)由系统按问题解析结果替换
+examples:
+  - question: 最近30天各品类的销售额排名
+    sql: |
+      SELECT p.category AS category, SUM(o.amount) AS sales
+      FROM your_fact_table o
+      JOIN your_dim_product p ON o.product_id = p.product_id
+      WHERE o.status IN ('已支付','已退款')
+        AND o.order_date >= '__PSTART__' AND o.order_date < '__PEND__'
+      GROUP BY p.category ORDER BY sales DESC

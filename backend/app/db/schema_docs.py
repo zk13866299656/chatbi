@@ -4,11 +4,22 @@
 - 表结构文档:让 LLM 知道有哪些表、字段含义、JOIN 关系;
 - 指标口径文档:统一 GMV / 退款率 / 客单价等指标的计算口径,避免"同名不同数";
 - few-shot 示例:高质量问数样例,既是 RAG 语料,也是 SQL 生成的上下文,还是降级模式的兜底答案。
+
+来源双轨:默认使用内置语义层(本项目电商数据集);配置 SEMANTIC_LAYER_FILE 指向 YAML
+后加载外部语义层——这是 MCP 私有化部署接入"自己的数据库"的前置能力。
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+from ..config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -291,10 +302,70 @@ FEW_SHOT_EXAMPLES: list[dict] = [
 ]
 
 
+@lru_cache
+def get_semantic_source() -> dict[str, Any]:
+    """语义层来源双轨:SEMANTIC_LAYER_FILE 指向 YAML 时加载外部语义层,否则使用内置。
+
+    外部语义层是 MCP 私有化部署接入"自己的数据库"的关键:
+    引擎部署到对方环境后,由对方按模板描述自己的表结构/口径/示例。
+    """
+    settings = get_settings()
+    file_name = (settings.semantic_layer_file or "").strip()
+    if not file_name:
+        return {
+            "source": "builtin",
+            "tables": TABLE_DOCS,
+            "metrics": METRIC_DOCS,
+            "examples": FEW_SHOT_EXAMPLES,
+            "joins": JOIN_HINTS,
+        }
+
+    path = Path(file_name)
+    if not path.is_absolute():
+        path = settings.base_dir / path
+    if not path.exists():
+        raise FileNotFoundError(f"语义层文件不存在: {path}")
+
+    import yaml
+
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not data.get("tables"):
+        raise ValueError(f"语义层文件缺少 tables 定义: {path}")
+
+    source = {
+        "source": f"file:{path.name}",
+        "tables": data["tables"],
+        "metrics": data.get("metrics") or [],
+        "examples": data.get("examples") or [],
+        "joins": data.get("joins") or [],
+    }
+    logger.info(
+        "已加载外部语义层 %s: tables=%d metrics=%d examples=%d",
+        path, len(source["tables"]), len(source["metrics"]), len(source["examples"]),
+    )
+    return source
+
+
+def get_tables() -> list[dict]:
+    return get_semantic_source()["tables"]
+
+
+def get_metrics() -> list[dict]:
+    return get_semantic_source()["metrics"]
+
+
+def get_examples() -> list[dict]:
+    return get_semantic_source()["examples"]
+
+
+def get_joins() -> list[str]:
+    return get_semantic_source()["joins"]
+
+
 def build_corpus() -> list[CorpusDoc]:
-    """把表结构 / 口径 / 示例拼装成可检索语料。"""
+    """把表结构 / 口径 / 示例拼装成可检索语料(来源由语义层配置决定)。"""
     docs: list[CorpusDoc] = []
-    for table in TABLE_DOCS:
+    for table in get_tables():
         fields_text = "\n".join(f"- {k}: {v}" for k, v in table["fields"].items())
         docs.append(CorpusDoc(
             doc_id=f"table:{table['table']}",
@@ -302,17 +373,19 @@ def build_corpus() -> list[CorpusDoc]:
             title=table["table"],
             text=f"表 {table['table']}: {table['meaning']}\n字段说明:\n{fields_text}",
         ))
-    docs.append(CorpusDoc(
-        doc_id="join:hints", kind="table", title="表关联关系",
-        text="表关联关系:\n" + "\n".join(f"- {h}" for h in JOIN_HINTS),
-    ))
-    for metric in METRIC_DOCS:
+    joins = get_joins()
+    if joins:
+        docs.append(CorpusDoc(
+            doc_id="join:hints", kind="table", title="表关联关系",
+            text="表关联关系:\n" + "\n".join(f"- {h}" for h in joins),
+        ))
+    for metric in get_metrics():
         docs.append(CorpusDoc(
             doc_id=f"metric:{metric['metric']}", kind="metric", title=metric["metric"],
             text=f"指标【{metric['metric']}】口径: {metric['definition']}"
                  + (f"\n注意: {metric['note']}" if metric.get("note") else ""),
         ))
-    for idx, example in enumerate(FEW_SHOT_EXAMPLES, 1):
+    for idx, example in enumerate(get_examples(), 1):
         docs.append(CorpusDoc(
             doc_id=f"example:{idx}", kind="example", title=example["question"],
             text=f"问题: {example['question']}\n参考SQL:\n{example['sql']}",

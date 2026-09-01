@@ -10,4 +10,6 @@ pandas>=2.0
 scikit-learn>=1.4
 numpy>=1.26
 fastembed>=0.3
+mcp>=1.20,<2
+pyyaml>=6.0
 python-dotenv>=1.0

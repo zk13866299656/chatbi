@@ -5,8 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from ...config import get_settings
+from ...db import store
 from ...db.database import health_check
-from ...db.schema_docs import FEW_SHOT_EXAMPLES, METRIC_DOCS, TABLE_DOCS
+from ...db.schema_docs import get_examples, get_metrics, get_tables
 from ...models.schemas import ApiResponse
 
 router = APIRouter(tags=["meta"])
@@ -19,10 +20,10 @@ async def semantic_layer():
         "tables": [
             {"name": t["table"], "meaning": t["meaning"],
              "fields": [{"name": k, "comment": v} for k, v in t["fields"].items()]}
-            for t in TABLE_DOCS
+            for t in get_tables()
         ],
-        "metrics": METRIC_DOCS,
-        "examples": [{"question": e["question"]} for e in FEW_SHOT_EXAMPLES],
+        "metrics": get_metrics(),
+        "examples": [{"question": e["question"]} for e in get_examples()],
     })
 
 
