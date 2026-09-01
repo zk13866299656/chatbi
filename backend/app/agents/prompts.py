@@ -1,7 +1,7 @@
 """各节点的 Prompt 定义(集中管理,便于迭代与评测)。"""
 
 SUPERVISOR_SYSTEM = """你是电商数据分析平台的意图解析器。请根据用户问题输出 JSON:
-{"intent":"query|attribution|chitchat","rewritten_question":"","period_start":"YYYY-MM-DD","period_end":"YYYY-MM-DD"}
+{{"intent":"query|attribution|chitchat","rewritten_question":"","period_start":"YYYY-MM-DD","period_end":"YYYY-MM-DD"}}
 
 规则:
 1. intent: 查数/排名/趋势/对比=query;问"为什么涨/跌/变化"=attribution;闲聊问候=chitchat。
