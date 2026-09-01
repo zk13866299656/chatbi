@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 
 from ..config import get_settings
@@ -32,6 +32,19 @@ def _create_engine():
 
 
 engine = _create_engine()
+
+# SQLite 并发硬化:SSE 流式写会话 与 页面查询 并发时,默认配置会互相阻塞甚至报错。
+# WAL 模式允许"读写并行";busy_timeout 让短暂的写锁变为等待而非立即失败。
+if engine.url.get_backend_name() == "sqlite":
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragma(dbapi_connection, _connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 

@@ -108,7 +108,11 @@ export function streamChat(
       }
       handlers.onDone()
     } catch (err) {
-      if ((err as Error).name === 'AbortError') return
+      if ((err as Error).name === 'AbortError') {
+        // 主动中断(切换会话/看门狗超时)也要收尾, 否则 sending 状态永久卡死
+        handlers.onDone()
+        return
+      }
       handlers.onError((err as Error).message || '网络错误')
     }
   })()

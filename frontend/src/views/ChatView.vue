@@ -48,6 +48,7 @@ const input = ref('')
 const sending = ref(false)
 const listEl = ref<HTMLDivElement>()
 let abort: (() => void) | null = null
+let streamGen = 0 // 代际令牌:被中断的旧流回调不得触碰新流的状态
 
 function scrollToBottom() {
   nextTick(() => {
@@ -84,10 +85,6 @@ function fmtTime(iso: string): string {
 
 // ============ 会话管理 ============
 
-async function loadConversations() {
-  conversations.value = await listConversations()
-}
-
 function mapStored(stored: StoredMessage[]): ChatMessage[] {
   return stored.map((m) => {
     if (m.role === 'user') return { role: 'user', text: m.content }
@@ -101,29 +98,41 @@ function mapStored(stored: StoredMessage[]): ChatMessage[] {
 }
 
 async function selectConversation(convId: string) {
-  if (sending.value) return
+  // 发送中切换会话:先中断当前流,不再硬性忽略点击(否则 sending 卡住时页面假死)
   if (abort) abort()
   currentConvId.value = convId
-  const stored = await fetchMessages(convId)
-  messages.splice(0, messages.length, ...mapStored(stored))
+  try {
+    const stored = await fetchMessages(convId)
+    messages.splice(0, messages.length, ...mapStored(stored))
+  } catch {
+    ElMessage.error('加载历史消息失败,请重试')
+  }
   scrollToBottom()
 }
 
 function newConversation() {
-  if (sending.value) return
   if (abort) abort()
   currentConvId.value = null
   messages.splice(0, messages.length)
 }
 
 async function onDelete(conv: ConversationInfo) {
-  await ElMessageBox.confirm(`删除会话「${conv.title}」及其全部消息?`, '删除确认', {
-    type: 'warning',
-    confirmButtonText: '删除',
-    cancelButtonText: '取消',
-  })
-  await removeConversation(conv.id)
-  ElMessage.success('已删除')
+  try {
+    await ElMessageBox.confirm(`删除会话「${conv.title}」及其全部消息?`, '删除确认', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return // 用户取消
+  }
+  try {
+    await removeConversation(conv.id)
+    ElMessage.success('已删除')
+  } catch {
+    ElMessage.error('删除失败,请重试')
+    return
+  }
   if (currentConvId.value === conv.id) {
     currentConvId.value = null
     messages.splice(0, messages.length)
@@ -131,7 +140,13 @@ async function onDelete(conv: ConversationInfo) {
   loadConversations()
 }
 
-onMounted(loadConversations)
+async function loadConversations() {
+  try {
+    conversations.value = await listConversations()
+  } catch {
+    ElMessage.error('会话列表加载失败')
+  }
+}
 
 // ============ 发送 ============
 
@@ -140,6 +155,7 @@ async function send(question?: string) {
   if (!q || sending.value) return
   if (abort) abort()
 
+  const gen = ++streamGen
   input.value = ''
   sending.value = true
   messages.push({ role: 'user', text: q })
@@ -156,35 +172,65 @@ async function send(question?: string) {
       content: (m.role === 'assistant' ? m.final?.answer_md : m.text) ?? '',
     }))
 
+  // 看门狗:超过 120 秒没有任何事件,视为挂起,主动中断
+  let watchdog = 0
+  const resetWatchdog = () => {
+    window.clearTimeout(watchdog)
+    watchdog = window.setTimeout(() => {
+      if (gen === streamGen) abort?.()
+    }, 120000)
+  }
+
+  const finish = () => {
+    if (gen !== streamGen) return
+    window.clearTimeout(watchdog)
+    sending.value = false
+    abort = null
+  }
+
   abort = streamChat(q, history, currentConvId.value, {
     onStart: (data) => {
+      if (gen !== streamGen) return
       if (data.conversation_id) currentConvId.value = data.conversation_id
     },
     onEvent: (event: ChatEvent) => {
+      if (gen !== streamGen) return
       assistant.events!.push(event)
+      resetWatchdog()
       scrollToBottom()
     },
     onFinal: (final: ChatFinal) => {
+      if (gen !== streamGen) return
       assistant.final = final
       assistant.streaming = false
       scrollToBottom()
     },
     onError: (message: string) => {
+      if (gen !== streamGen) return
       assistant.error = message
       assistant.streaming = false
       scrollToBottom()
     },
     onDone: () => {
-      assistant.streaming = false
-      sending.value = false
-      abort = null
+      if (gen !== streamGen) {
+        // 被新请求中断的旧流:把它的气泡收尾,但不影响新流状态
+        assistant.streaming = false
+        return
+      }
+      finish()
       scrollToBottom()
       loadConversations()
     },
   })
+  resetWatchdog()
 }
 
-onBeforeUnmount(() => abort?.())
+onMounted(loadConversations)
+
+onBeforeUnmount(() => {
+  ++streamGen
+  abort?.()
+})
 
 // 看板联动:外部带问题进来时自动发送(若正在流式请求中则先填入输入框)
 watch(
