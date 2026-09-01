@@ -55,10 +55,16 @@ class ChatBIWorkflow:
             },
         )
         # query 主链路:分发后两路检索并行,屏障汇合(barrier)再生成 SQL
+        # query 主链路:分发后两路检索并行,屏障汇合(barrier)再生成 SQL
         workflow.add_edge("dispatch_query", "retrieve_schema")
         workflow.add_edge("dispatch_query", "retrieve_caliber")
         workflow.add_edge(["retrieve_schema", "retrieve_caliber"], "generate_sql")
-        workflow.add_edge("generate_sql", "validate_sql")
+        # 生成阶段可发生域外拒答(out_of_domain)→ 直接走兜底
+        workflow.add_conditional_edges(
+            "generate_sql",
+            lambda state: "fallback" if state.get("error") else "validate",
+            {"validate": "validate_sql", "fallback": "fallback_answer"},
+        )
 
         # attribution 链路:口径检索 → 模板化归因分析
         workflow.add_edge("retrieve_caliber_attr", "attribution_run")

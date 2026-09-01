@@ -94,7 +94,7 @@ python evals/retriever_benchmark.py            # TF-IDF vs Embedding 检索对�
 5. **SSE 过程透出**: 前端实时渲染每个 Agent 节点的进度时间线,长查询不再黑盒等待
 6. **归因模板化**: "为什么涨/跌"走模板 SQL + 贡献度计算,数字全部来自真实查询,不让 LLM 编造
 7. **会话持久化**: 对话与最终结果(图表/SQL/数据)落库,UUID 主键规避自增方言差异,刷新/重开不丢,支撑多轮追问
-8. **检索双后端 + 对比评测**: TF-IDF 与 Embedding(bge-small-zh, fastembed ONNX 本地推理)同接口可切换;50 条评测集实测:Embedding 在口语化问法上全面胜出(36% vs 30%,可覆盖题 18/18 vs 15/18),详见 `evals/comparison_report.md`
+8. **检索三后端 + 对比评测 + 域外拒答**: TF-IDF / Embedding(bge-small-zh, ONNX 本地推理)/ Hybrid(双路召回+置信度校准)同接口可切换,Hybrid 为默认;50 条评测集三方实测(28% / 34% / 34%,可覆盖题 14/17 vs 17/17 vs 17/17),含"品类/品牌"混淆、时间归一化等实证发现与域外拒答机制,详见 `evals/comparison_report.md`
 9. **自建 MCP Server**: 问数能力按 MCP 协议暴露(ask_data / execute_validated_sql / list_semantic_layer / get_metric_definition),Cursor 等外部 Agent 一段配置即可接入;配合语义层 YAML 配置化,支持私有化部署接入自己的数据库——能力放出去,风险关在里面
 
 ## 七、Roadmap

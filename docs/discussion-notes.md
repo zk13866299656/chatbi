@@ -52,8 +52,9 @@
    - 结果:TF-IDF 30% vs Embedding 36%;可覆盖题 15/18 vs **18/18**;3 条口语题仅 Embedding 通过,零反向
    - 关键教训:①示例匹配的时间归一化对 embedding 同样必需(时间前缀语义相似同样导致错配);②示例库扩容暴露 TF-IDF 的"品类/品牌"一字之差混淆;③弃权 vs 答错的权衡(embedding 余弦普遍偏高,覆盖广但错配时给出自信错答案,生产需配拒答阈值)
 3. ~~**自建 MCP Server**~~ ✅ 已完成(2026-09-01):FastMCP(官方 SDK,锁定 1.x)暴露 4 个工具(ask_data 完整问数 / execute_validated_sql 安全执行 / list_semantic_layer / get_metric_definition),复用现有 LangGraph 工作流与安全层;stdio + streamable-http 双传输;MCP 客户端协议实测全通过(发现/拦截/问数)。配套**语义层配置化**(SEMANTIC_LAYER_FILE 指向 YAML)——私有化部署接入"自己的数据库"的前置能力;接入文档 docs/mcp.md
-4. MySQL 切换(简历定稿时):建库 → 换 DB_URL → `pip install pymysql` → 重跑两个数据脚本,业务代码零改动
-5. GitHub Actions 评测门禁(CI)
+4. ~~**混合检索 + 拒答机制**~~ ✅ 已完成(2026-09-01):HybridRetriever(Embedding 语义召回 + TF-IDF 字面召回,余弦按实测分布校准到 [0,1] 后融合,双路命中加分,仅字路命中打折)成为默认后端;域外拒答两级阈值(复用 0.35 / 域外 0.12,LLM 模式下域外问题不进 LLM 直接拒答);三方基准 28%/34%/34%(可覆盖题 14/17 vs 17/17 vs 17/17)。诚实结论:Hybrid 价值在风险结构(拒答+双路印证)而非准确率;中相似度域外问题(如"利润构成" 0.33)仍难拒,是开放问题
+5. MySQL 切换 / GitHub Actions 评测门禁 / Docker(简历定稿时)
+6. 自检曾发现:supervisor 提示词 JSON 花括号被 str.format() 解析致 LLM 意图解析从未生效(已修);占位符残留需在安全层拦截(已修)——"评测+自检"文化的两个实证
 
 ## 三、已完成里程碑
 

@@ -1,9 +1,9 @@
-"""检索器对比基准:TF-IDF vs Embedding。
+"""检索器对比基准:TF-IDF vs Embedding vs Hybrid(混合检索)。
 
 方法论:
 1. 全程强制降级模式(LLM 关闭)——此时 SQL 由"检索到的相似示例"直接决定,
    检索质量与端到端执行准确率强相关,是隔离变量(检索器)的最公平玩法;
-2. 同一评测集分别跑 TF-IDF / Embedding 两个后端,对比执行准确率、失败用例差异、检索耗时;
+2. 同一评测集分别跑各检索后端,对比执行准确率、答对/答错/弃权三维分布、检索耗时;
 3. 输出 markdown 对比报告(写入 evals/comparison_report.md)。
 
 用法:
@@ -20,6 +20,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 # 必须在导入 app 模块之前:强制降级模式,隔离检索器变量
@@ -34,18 +35,18 @@ from app.workflows.graph import get_workflow  # noqa: E402
 
 CASES_PATH = Path(__file__).resolve().parent / "cases.jsonl"
 REPORT_PATH = Path(__file__).resolve().parent / "comparison_report.md"
-BACKENDS = ["tfidf", "embedding"]
+BACKENDS = ["tfidf", "embedding", "hybrid"]
+BACKEND_LABELS = {"tfidf": "TF-IDF", "embedding": "Embedding", "hybrid": "Hybrid(混合)"}
 
 
 @dataclass
 class BenchResult:
     backend: str
-    status: str = ""          # passed | failed | no_sql | error
+    status: str = ""          # passed | failed | no_sql | error | invalid_gold
     elapsed_ms: int = 0
     error: str = ""
     top_example: str = ""     # 降级模式下实际复用的示例问题
     top_score: float = 0.0
-    violations: list[str] = field(default_factory=list)
 
 
 def load_cases() -> list[dict]:
@@ -83,21 +84,29 @@ async def run_backend(backend: str, cases: list[dict], skip_gold_check: bool) ->
     info = {
         "backend": backend,
         "resolved": getattr(retriever, "backend_name", "unavailable") if retriever else "unavailable",
-        "model": settings.embedding_model if backend == "embedding" else "sklearn TF-IDF(char 1-2gram)",
+        "model": settings.embedding_model if backend in ("embedding", "hybrid") else "sklearn TF-IDF(char 1-2gram)",
         "init_error": init_error,
     }
     if retriever is None or info["resolved"].startswith("tfidf"):
-        if backend == "embedding":
+        if backend in ("embedding", "hybrid"):
             info["skipped"] = True
             return {"info": info, "results": {}}
 
     results: dict[str, BenchResult] = {}
 
     # 0. 校验 gold SQL 本身可执行(一次性)
+    #    gold 中的 __PSTART__/__PEND__/{REGION} 先做哑替换再过安全校验——
+    #    占位符拦截是针对"生成 SQL"的生产防线,不该误伤带占位符的标注答案
     invalid: set[str] = set()
     if not skip_gold_check:
         for case in cases:
-            sql, err = check_sql_safety(case["gold_sql"])
+            probe = (
+                case["gold_sql"]
+                .replace("__PSTART__", "2026-06-01")
+                .replace("__PEND__", "2026-07-01")
+                .replace("{REGION}", "华东")
+            )
+            sql, err = check_sql_safety(probe)
             if err:
                 invalid.add(case["id"])
                 continue
@@ -193,14 +202,17 @@ def _normalize(rows: list[list]) -> list[tuple]:
 
 
 def write_report(runs: dict[str, dict], cases: list[dict]) -> None:
-    from datetime import datetime
+    """通用多后端报告:表头/差异/指标解读/逐用例全部按 BACKENDS 动态生成。"""
+    active = [b for b in BACKENDS if runs.get(b) and not runs[b]["info"].get("skipped")]
 
     lines = [
-        "# 语义检索器对比报告:TF-IDF vs Embedding",
+        "# 语义检索器对比报告:TF-IDF vs Embedding vs Hybrid",
         "",
         f"- 时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
         "- 方法: 全程降级模式(LLM 关闭),SQL 由检索到的相似示例直接决定,"
-        "在同一评测集上对比两个检索后端的端到端执行准确率",
+        "在同一评测集上对比各检索后端的端到端执行准确率",
+        "- Hybrid = Embedding 语义召回 + TF-IDF 字面召回,余弦按实测分布校准后融合,"
+        "并引入域外拒答(置信度不足宁可弃权)",
         "",
     ]
 
@@ -208,7 +220,7 @@ def write_report(runs: dict[str, dict], cases: list[dict]) -> None:
     for backend in BACKENDS:
         run = runs.get(backend)
         if not run or run["info"].get("skipped"):
-            headline.append(f"| {backend} | 不可用(初始化失败,见下) | - | - | - | - |")
+            headline.append(f"| {backend} | 不可用 | - | - | - | - |")
             continue
         results = run["results"]
         valid = [r for r in results.values() if r.status != "invalid_gold"]
@@ -220,31 +232,27 @@ def write_report(runs: dict[str, dict], cases: list[dict]) -> None:
         )
     lines += headline + [""]
 
-    tf_run, emb_run = runs.get("tfidf"), runs.get("embedding")
-    if tf_run and emb_run and not emb_run["info"].get("skipped"):
-        only_tf, only_emb = [], []
-        for case in cases:
-            cid = case["id"]
-            t, e = tf_run["results"].get(cid), emb_run["results"].get(cid)
-            if not t or not e or t.status == "invalid_gold":
-                continue
-            if t.status == "passed" and e.status != "passed":
-                only_tf.append(cid)
-            elif e.status == "passed" and t.status != "passed":
-                only_emb.append(cid)
-        lines += [
-            "## 差异用例",
-            "",
-            f"- 仅 TF-IDF 通过: {', '.join(only_tf) if only_tf else '无'}",
-            f"- 仅 Embedding 通过: {', '.join(only_emb) if only_emb else '无'}",
-            "",
-        ]
+    if len(active) >= 2:
+        # 差异用例:某后端独有通过
+        lines += ["## 差异用例", ""]
+        for backend in active:
+            others = [b for b in active if b != backend]
+            only = [
+                case["id"] for case in cases
+                if runs[backend]["results"].get(case["id"])
+                and runs[backend]["results"][case["id"]].status == "passed"
+                and not any(
+                    runs[b]["results"].get(case["id"]) and runs[b]["results"][case["id"]].status == "passed"
+                    for b in others
+                )
+            ]
+            lines.append(f"- 仅 {BACKEND_LABELS[backend]} 通过: {', '.join(only) if only else '无'}")
+        lines.append("")
 
-        # ===== 指标解读(自动计算) =====
+        # 指标解读(自动计算):答对 / 答错 / 弃权 三维分布
         stat = {}
-        for backend, run in (("TF-IDF", tf_run), ("Embedding", emb_run)):
-            results = run["results"]
-            valid = [r for r in results.values() if r.status != "invalid_gold"]
+        for backend in active:
+            valid = [r for r in runs[backend]["results"].values() if r.status != "invalid_gold"]
             stat[backend] = {
                 "passed": sum(1 for r in valid if r.status == "passed"),
                 "failed": sum(1 for r in valid if r.status == "failed"),
@@ -252,53 +260,65 @@ def write_report(runs: dict[str, dict], cases: list[dict]) -> None:
             }
         answerable = [
             case["id"] for case in cases
-            if any(run["results"].get(case["id"]) and run["results"][case["id"]].status == "passed"
-                   for run in (tf_run, emb_run))
+            if any(
+                runs[b]["results"].get(case["id"]) and runs[b]["results"][case["id"]].status == "passed"
+                for b in active
+            )
         ]
+
+        header = "| 指标 | " + " | ".join(BACKEND_LABELS[b] for b in active) + " |"
+        sep = "|---" * (len(active) + 1) + "|"
+        rows = [
+            ("通过(答对)", [str(stat[b]["passed"]) for b in active]),
+            ("答错(复用了错误的示例)", [str(stat[b]["failed"]) for b in active]),
+            ("弃权(判定无可复用示例)", [str(stat[b]["abstained"]) for b in active]),
+            (
+                f"可覆盖题正确率({len(answerable)} 条)",
+                [
+                    f"{sum(1 for cid in answerable if runs[b]['results'][cid].status == 'passed')}/{len(answerable)}"
+                    for b in active
+                ],
+            ),
+        ]
+        lines += ["## 指标解读", "", header, sep]
+        lines += [f"| {name} | " + " | ".join(vals) + " |" for name, vals in rows]
         lines += [
-            "## 指标解读",
             "",
-            "| 指标 | TF-IDF | Embedding |",
-            "|---|---|---|",
-            f"| 通过(答对) | {stat['TF-IDF']['passed']} | {stat['Embedding']['passed']} |",
-            f"| 答错(自信地复用错示例) | {stat['TF-IDF']['failed']} | {stat['Embedding']['failed']} |",
-            f"| 弃权(判定无可复用示例) | {stat['TF-IDF']['abstained']} | {stat['Embedding']['abstained']} |",
-            f"| 示例库可覆盖题上的正确率({len(answerable)} 条) "
-            f"| {sum(1 for cid in answerable if tf_run['results'][cid].status == 'passed')}/{len(answerable)} "
-            f"| {sum(1 for cid in answerable if emb_run['results'][cid].status == 'passed')}/{len(answerable)} |",
-            "",
-            "**弃权 vs 答错的权衡**:Embedding 的余弦分数普遍偏高,几乎总能找到\"相似\"示例(覆盖广,"
-            "但错配时会给出自信的错答案);TF-IDF 对真正不相关的问题会落入弃权。生产系统的正确姿势是"
-            "给\"复用示例\"设置更严的门槛 + 校准分数,或引入拒答机制,而不是盲目追求覆盖率。",
+            "**弃权 vs 答错的权衡**:Embedding 余弦普遍偏高,几乎总能找到\"相似\"示例(覆盖广,"
+            "但错配时给出自信的错答案);Hybrid 用校准置信度恢复分数可比性,并引入拒答——"
+            "置信度不足时宁可弃权,也不给自信的错答案。",
             "",
             "## 结论",
             "",
-            "1. **口语化鲁棒性是 embedding 的决定性优势**:c38「哪些东西卖得最好」、c40「哪个区域最常退货」"
-            "这类与示例库字面几乎不重合的问法,TF-IDF 检索失败(弃权或错配),embedding 全部命中正确示例;"
-            f"反向(仅 TF-IDF 通过)为 {len(only_tf)} 条。",
-            "2. **示例库扩容暴露了 TF-IDF 的结构混淆**:c37「上个月各品类的销售额排名」被错配到"
-            "「各**品牌**的销售额排名」——品/牌一字之差,字面统计无法区分意图;embedding 在语义空间将其分开。",
-            "3. **时间归一化对两种检索器都是必需的**:不做归一化时,\"2026年6月\"的时间前缀相似度"
-            "会让品类排名错配到每天趋势(两种后端实测均复现),这是本次实验最有价值的教训:",
-            "   示例匹配必须在与时间无关的语义上进行,时间窗由 __PSTART__/__PEND__ 占位符机制统一处理。",
-            "4. **端到端准确率不是唯一指标**:36% vs 30% 的差距看似不大,但其构成不同"
-            "(答对/答错/弃权三维分布);绝对值偏低是因为评测集刻意覆盖了示例库之外的查询形状——"
-            "在 LLM 模式下这些题由模型生成 SQL,示例仅作为 few-shot 参考。",
-            "5. **落地建议**:主链路采用 混合检索(向量召回 + 关键词精确命中)+ 分数校准 + 拒答阈值;"
-            "embedding 代价是模型依赖(本地 ONNX 约 100MB / API 计费)与 3ms 级检索耗时(实测,仍可忽略)。",
+            "1. **口语化鲁棒性是语义检索的决定性优势**:「哪些东西卖得最好」「哪个区域最常退货」"
+            "这类与示例库字面几乎不重合的问法,TF-IDF 检索失败,Embedding 与 Hybrid 全部命中正确示例。",
+            "2. **示例库扩容暴露 TF-IDF 的结构混淆**:「各**品类**的销售额排名」被错配到「各**品牌**的"
+            "销售额排名」——一字之差,字面统计无法区分意图;语义空间可以分开,Hybrid 融合排序保留这一优势。",
+            "3. **时间归一化对三种检索器都是必需的**:不做归一化时,\"2026年6月\"的时间前缀相似度"
+            "会让品类排名错配到每天趋势(TF-IDF 与 Embedding 均实测复现)。示例匹配必须在与时间无关的"
+            "语义上进行,时间窗由 __PSTART__/__PEND__ 占位符机制统一处理。",
+            "4. **Hybrid 的价值不在刷准确率,而在风险结构**:准确率与 Embedding 持平(语义通路主导),"
+            "但置信度校准让\"答错\"变得可度量、可拒答;字面通路的保留,兜住了专有名词/编码类"
+            "语义模型容易失明的场景。域外问题(如闲聊、超出数据主题的提问)在进入 LLM 前即被拒绝,"
+            "同时节省调用成本。",
+            "5. **进一步方向**:拒答阈值随语料扩容重标定;引入 rerank 模型做精排;"
+            "评测集按查询形状分层抽样,避免\"可覆盖题\"占比漂移影响结论。",
             "",
         ]
 
-    lines += ["## 逐用例明细", "", "| 用例 | 问题 | TF-IDF | Embedding | 实际复用示例(最后一次运行) |", "|---|---|---|---|---|"]
+    lines += ["## 逐用例明细", "", "| 用例 | 问题 | " + " | ".join(BACKEND_LABELS[b] for b in active) + " | 实际复用示例(最后一次运行) |",
+              "|---|---" * (len(active) + 2) + "|"]
     for case in cases:
         cid = case["id"]
-        t = tf_run["results"].get(cid) if tf_run else None
-        e = emb_run["results"].get(cid) if emb_run else None
-        ref = (e or t)
+        statuses = []
+        ref = None
+        for backend in active:
+            r = runs[backend]["results"].get(cid)
+            statuses.append(r.status if r else "-")
+            if r and (ref is None or r.top_score >= ref.top_score):
+                ref = r
         example = f"{ref.top_example}({ref.top_score:.2f})" if ref and ref.top_example else "-"
-        lines.append(
-            f"| {cid} | {case['question']} | {t.status if t else '-'} | {e.status if e else '-'} | {example} |"
-        )
+        lines.append(f"| {cid} | {case['question']} | " + " | ".join(statuses) + f" | {example} |")
 
     REPORT_PATH.write_text("\n".join(lines), encoding="utf-8")
     print(f"\n报告已写入: {REPORT_PATH}")
@@ -318,7 +338,7 @@ async def main() -> int:
         runs[backend] = await run_backend(backend, cases, args.skip_gold_check)
         run = runs[backend]
         if run["info"].get("skipped"):
-            print("Embedding 初始化失败,跳过:", run["info"].get("init_error"))
+            print("初始化失败,跳过:", run["info"].get("init_error"))
         else:
             valid = [r for r in run["results"].values() if r.status != "invalid_gold"]
             passed = sum(1 for r in valid if r.status == "passed")

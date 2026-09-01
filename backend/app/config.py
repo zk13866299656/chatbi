@@ -43,13 +43,16 @@ class Settings(BaseSettings):
     sql_max_rows: int = 200
     sql_timeout_seconds: float = 10.0
 
-    # 语义检索后端: auto(优先 embedding,不可用回退 tfidf) | tfidf | embedding
-    embedding_backend: str = "auto"
+    # 语义检索后端: hybrid(默认,语义+字面双路融合,置信度校准+拒答) | embedding | tfidf | auto(同 hybrid)
+    embedding_backend: str = "hybrid"
     # embedding 提供方: local(fastembed 本地 ONNX, 默认) | api(OpenAI 兼容 /embeddings)
     embedding_provider: str = "local"
     embedding_model: str = "BAAI/bge-small-zh-v1.5"
     embedding_api_key: str = ""
     embedding_base_url: str = ""
+
+    # 域外拒答阈值:示例最高校准置信度低于该值时,LLM 模式也不作答(问题大概率超出语义层覆盖)
+    example_abstain_threshold: float = 0.12
 
     log_level: str = "INFO"
 

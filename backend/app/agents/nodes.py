@@ -241,6 +241,16 @@ async def generate_sql_node(state: dict) -> dict:
     settings = get_settings()
     events: list[dict] = []
 
+    # 域外拒答:最高示例相似度低于阈值,说明问题大概率超出语义层覆盖范围。
+    # 无论 LLM 是否可用都拒绝作答——宁可说"不会",不给自信的错答案,还省一次 LLM 调用。
+    all_examples = sorted(state.get("example_sqls", []), key=lambda item: item["score"], reverse=True)
+    best_score = all_examples[0]["score"] if all_examples else 0.0
+    if best_score < settings.example_abstain_threshold:
+        return {
+            "error": "out_of_domain",
+            "events": [_emit("generate_sql", f"问题超出语义层覆盖范围(最高相似度 {best_score:.2f}),拒绝作答")],
+        }
+
     if settings.llm_enabled:
         try:
             context_parts = [
@@ -593,6 +603,16 @@ def small_talk_node(state: dict) -> dict:
 
 
 def fallback_answer_node(state: dict) -> dict:
+    if state.get("error") == "out_of_domain":
+        return {
+            "answer_md": (
+                "这个问题超出了当前语义层覆盖的范围,我无法可靠作答。\n"
+                "当前可查询的主题包括:销售额/GMV、订单量、客单价、退款率与退款原因、"
+                "商品销量、店铺、客户与会员等级、支付方式、评价评分。\n"
+                "建议换个问法,或先在「数据字典」页了解可查询的数据范围。"
+            ),
+            "events": [_emit("fallback_answer", "域外问题,已拒答并给出引导")],
+        }
     return {
         "answer_md": (
             "这个问题暂时没能完成查询。常见原因:\n"

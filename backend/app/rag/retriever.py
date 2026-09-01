@@ -171,6 +171,67 @@ class EmbeddingRetriever(BaseRetriever):
         return candidates[:top_k]
 
 
+class HybridRetriever(BaseRetriever):
+    """混合检索:Embedding 语义召回 + TF-IDF 字面召回,校准置信度融合排序。
+
+    解决检索对比报告发现的两个问题:
+    1. Embedding 余弦普遍偏高 → "自信地答错":把语义余弦按实测分布线性校准到 [0,1]
+       (0.40 以下视为无关,0.95 以上视为满分),分数恢复可比性;
+    2. TF-IDF 对口语化问法失明 → 仅字面命中的候选以打折置信度参与,并给
+       "双路同时命中"的候选加分(两路都认,才更可信)。
+
+    拒答语义:校准置信度低于 example_threshold 时宁可弃权——
+    宁可说"这个问题我不会",不给自信的错答案。
+    """
+
+    example_threshold = 0.35
+    backend_name = "hybrid"
+
+    _EMB_FLOOR = 0.40  # 语义余弦低于此值视为无关
+    _EMB_CEIL = 0.95   # 高于此值视为满分
+
+    def __init__(self, embedding: EmbeddingRetriever | None = None, tfidf: TfidfRetriever | None = None) -> None:
+        self._embedding = embedding or EmbeddingRetriever()
+        self._tfidf = tfidf or TfidfRetriever()
+        self._docs = self._embedding._docs
+        if [d.doc_id for d in self._docs] != [d.doc_id for d in self._tfidf._docs]:
+            raise ValueError("双路检索器语料不一致")
+
+    def _calibrate(self, cos: float) -> float:
+        conf = (cos - self._EMB_FLOOR) / (self._EMB_CEIL - self._EMB_FLOOR)
+        return max(0.0, min(1.0, conf))
+
+    def search_with_scores(self, query: str, kind: str | None = None, top_k: int | None = None) -> list[tuple[CorpusDoc, float]]:
+        settings = get_settings()
+        top_k = top_k or settings.retriever_top_k
+        recall_k = max(top_k * 2, 6)
+
+        emb_hits = self._embedding.search_with_scores(query, kind=kind, top_k=recall_k)
+        tfidf_hits = self._tfidf.search_with_scores(query, kind=kind, top_k=recall_k)
+
+        calibrated: dict[str, float] = {}
+        merged: dict[str, CorpusDoc] = {}
+        tfidf_top3 = {d.doc_id for d, _ in tfidf_hits[:3]}
+
+        for doc, cos in emb_hits:
+            score = self._calibrate(cos)
+            if doc.doc_id in tfidf_top3:
+                score = min(1.0, 0.85 * score + 0.15)  # 双路同时命中:加分
+            else:
+                score = 0.85 * score
+            calibrated[doc.doc_id] = score
+            merged[doc.doc_id] = doc
+
+        # 仅 TF-IDF 命中的(字面精确、语义模型失明的场景):置信度打折后补入
+        for doc, raw in tfidf_hits:
+            if doc.doc_id not in merged and raw >= self._tfidf.example_threshold:
+                merged[doc.doc_id] = doc
+                calibrated[doc.doc_id] = 0.8 * raw
+
+        ranked = sorted(merged.values(), key=lambda d: calibrated.get(d.doc_id, 0.0), reverse=True)
+        return [(doc, calibrated[doc.doc_id]) for doc in ranked[:top_k] if calibrated[doc.doc_id] > 0.02]
+
+
 class UnavailableRetriever(TfidfRetriever):
     """embedding 强制启用但初始化失败时的兜底,行为同 TF-IDF 并保留日志线索。"""
 
@@ -184,13 +245,12 @@ def get_retriever() -> BaseRetriever:
     if backend == "tfidf":
         return TfidfRetriever()
     try:
-        return EmbeddingRetriever()
-    except Exception as exc:  # noqa: BLE001
         if backend == "embedding":
-            logger.error("Embedding 检索器初始化失败(%s),已回退 TF-IDF", exc)
-            return UnavailableRetriever()
-        logger.info("Embedding 检索器不可用(%s),使用 TF-IDF(auto 回退)", exc)
-        return TfidfRetriever()
+            return EmbeddingRetriever()
+        return HybridRetriever()  # hybrid 与 auto(兼容旧配置)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("%s 检索器初始化失败(%s),已回退 TF-IDF", backend, exc)
+        return UnavailableRetriever()
 
 
 def reset_retriever() -> None:
