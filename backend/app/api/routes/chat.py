@@ -7,6 +7,7 @@ SSE 事件流:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -77,10 +78,10 @@ async def _run_workflow(question: str, history: list[dict]) -> dict:
 @router.post("/chat", response_model=ApiResponse)
 async def chat(req: ChatRequest):
     """非流式接口(评测脚本与联调用)。"""
-    conversation_id = _ensure_conversation(req)
-    store.append_messages(conversation_id, [("user", req.question, None)])
+    conversation_id = await asyncio.to_thread(_ensure_conversation, req)
+    await asyncio.to_thread(store.append_messages, conversation_id, [("user", req.question, None)])
     final = await _run_workflow(req.question, req.history)
-    _persist_final(conversation_id, req.question, final)
+    await asyncio.to_thread(_persist_final, conversation_id, req.question, final)
     data = _final_payload(final)
     data["conversation_id"] = conversation_id
     return ApiResponse(data=data)
@@ -93,9 +94,7 @@ async def chat_stream(req: ChatRequest):
     会话在首条消息时懒创建;用户消息在工作流启动前先落库,
     即使请求中断,提问记录也不丢失。
     """
-    import asyncio
-
-    conversation_id = _ensure_conversation(req)
+    conversation_id = await asyncio.to_thread(_ensure_conversation, req)
     await asyncio.to_thread(store.append_messages, conversation_id, [("user", req.question, None)])
 
     async def event_generator():
